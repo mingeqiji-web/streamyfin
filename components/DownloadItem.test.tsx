@@ -69,6 +69,11 @@ jest.mock("@gorhom/bottom-sheet", () => {
   };
 });
 jest.mock("@/components/common/HeaderIcon", () => ({ HeaderIcon: () => null }));
+// The ring animates with Reanimated, which needs the native worklets runtime.
+jest.mock("./ProgressCircle", () => ({
+  __esModule: true,
+  default: () => null,
+}));
 // Lists the options instead of a menu to open, so a spec can see what a
 // selector offers and pick from it.
 jest.mock("./PlatformDropdown", () => {
