@@ -17,6 +17,9 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONArray
 import org.json.JSONException
@@ -70,6 +73,15 @@ class MPVLayerRenderer(
         private val surfaceSizeExecutor = Executors.newSingleThreadExecutor { task ->
             Thread(task, "mpv-surface-size").apply { isDaemon = true }
         }
+
+        // TV fallback chain timing. The decode probe waits this long after the
+        // file loaded — by then the decoder exists — and the drop monitor
+        // samples the dropped-frame counter over the same window.
+        private const val TV_PROBE_DELAY_MS = 5_000L
+        private const val TV_DROP_WINDOW_MS = 5_000L
+        // Frames the video output may drop inside one window before the
+        // renderer, rather than the decoder, is blamed for the slideshow.
+        private const val TV_FRAME_DROP_LIMIT = 50
     }
 
     private fun isTvDevice(): Boolean {
@@ -191,6 +203,33 @@ class MPVLayerRenderer(
     private var initialSubtitleId: Int? = null
     private var initialAudioId: Int? = null
     private var currentLoop: Boolean = false
+
+    // MARK: - TV fallback chain (hardware decoder, then renderer)
+
+    /**
+     * Worker for the decode probe and the dropped-frame monitor. Both read
+     * mpv properties, which block until the core answers, so they must not
+     * run on the main thread.
+     */
+    private val fallbackExecutor: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { task ->
+            Thread(task, "mpv-fallback").apply { isDaemon = true }
+        }
+
+    /** Bumped on every load so probes belonging to a replaced file are ignored. */
+    @Volatile private var fallbackToken = 0L
+    private var decodeProbeFuture: ScheduledFuture<*>? = null
+    private var dropMonitorFuture: ScheduledFuture<*>? = null
+
+    /** The hwdec in use: mediacodec → mediacodec-copy → auto-safe. */
+    private var configuredHwdec: String = "mediacodec"
+    /** The vo in use: gpu-next → gpu. */
+    private var configuredVo: String = voDriver
+    /** 0 = mediacodec, 1 = mediacodec-copy, 2 = auto-safe. */
+    private var decodeFallbackStage = 0
+    private var renderFallbackDone = false
+    /** Last frame-drop-count sample; -1 = re-baseline on the next sample. */
+    private var lastDropCount = -1
     
     override val isPausedState: Boolean
         get() = _isPaused
@@ -304,6 +343,14 @@ class MPVLayerRenderer(
                 isTv -> {
                     mpv?.setOptionString("hwdec", "mediacodec")
                     mpv?.setOptionString("profile", "fast")
+                    // Keep the GPU as free as possible for 4K: no debanding,
+                    // no dithering. dither-depth is an int option that some
+                    // builds only accept as a number, so fall back to 0
+                    // (dithering off) when "no" is rejected.
+                    mpv?.setOptionString("deband", "no")
+                    if (mpv?.setOptionString("dither-depth", "no") != 0) {
+                        mpv?.setOptionString("dither-depth", "0")
+                    }
                     // Don't retain already-played content for backward
                     // seeking over a network source — Jellyfin can re-fetch
                     // on demand. Saves up to ~30 MiB on long seeks and
@@ -316,6 +363,18 @@ class MPVLayerRenderer(
                 }
                 else -> mpv?.setOptionString("hwdec", "mediacodec-copy")
             }
+
+            // Remember what was configured: the TV fallback chain downgrades
+            // from these values. A fresh mpv instance starts the chain over.
+            configuredHwdec = when {
+                isEmulator() -> "no"
+                isTv -> "mediacodec"
+                else -> "mediacodec-copy"
+            }
+            configuredVo = voDriver
+            decodeFallbackStage = 0
+            renderFallbackDone = false
+            lastDropCount = -1
             
             // Seeking optimization - faster seeking at the cost of less precision
             // Use keyframe seeking by default (much faster for network streams)
@@ -408,6 +467,13 @@ class MPVLayerRenderer(
 
     override fun stop() {
         invalidateSeekReports()
+        // Stop the TV fallback probes: they read mpv properties and would
+        // reload a file that is going away.
+        fallbackToken++
+        decodeProbeFuture?.cancel(false)
+        dropMonitorFuture?.cancel(false)
+        decodeProbeFuture = null
+        dropMonitorFuture = null
         val pendingToken = pendingOwnershipToken
         val activeToken = activeOwnershipToken
         if (!isRunning && pendingToken == null && activeToken == null) return
@@ -662,6 +728,10 @@ class MPVLayerRenderer(
     
     override fun load(config: VideoLoadConfig) {
         invalidateSeekReports()
+        // A new file invalidates the probes scheduled for the previous one.
+        fallbackToken++
+        decodeProbeFuture?.cancel(false)
+        dropMonitorFuture?.cancel(false)
         val generation = loadGenerations.begin()
         val url = config.url
         currentUrl = url
@@ -804,6 +874,125 @@ class MPVLayerRenderer(
         mpv?.observeProperty("video-params/w", MPV_FORMAT_INT64)
         mpv?.observeProperty("video-params/h", MPV_FORMAT_INT64)
         mpv?.observeProperty("video-params/rotate", MPV_FORMAT_INT64)
+    }
+
+    // MARK: - TV fallback chain
+
+    /**
+     * True when the TV fallback chain applies: an Android TV that is not the
+     * emulator. The emulator's MediaCodec cannot bind an output surface, so
+     * it must stay on software decoding (see [isEmulator]).
+     */
+    private fun tvFallbackEnabled(): Boolean = isTv && !isEmulator()
+
+    /**
+     * Arm the probes for the file that just loaded: the decode probe reads
+     * the decoder mpv settled on, the drop monitor watches the dropped-frame
+     * counter from then on.
+     */
+    private fun scheduleFallbackProbes() {
+        if (!tvFallbackEnabled()) return
+        val token = fallbackToken
+        decodeProbeFuture?.cancel(false)
+        dropMonitorFuture?.cancel(false)
+        decodeProbeFuture = fallbackExecutor.schedule(
+            { probeHardwareDecode(token) },
+            TV_PROBE_DELAY_MS,
+            TimeUnit.MILLISECONDS,
+        )
+        dropMonitorFuture = fallbackExecutor.scheduleWithFixedDelay(
+            { sampleFrameDrops(token) },
+            TV_DROP_WINDOW_MS,
+            TV_DROP_WINDOW_MS,
+            TimeUnit.MILLISECONDS,
+        )
+    }
+
+    /**
+     * Read the decoder mpv actually ended up with.
+     *
+     * Zero-copy MediaCodec frequently fails to bind the surface on some TV
+     * SoCs, and mpv then silently falls back to software decoding — 4K plays
+     * as a slideshow with no error anywhere. Step down the chain until a
+     * hardware decoder is in use: mediacodec → mediacodec-copy → auto-safe.
+     */
+    private fun probeHardwareDecode(token: Long) {
+        if (token != fallbackToken || !isRunning) return
+        val m = mpv ?: return
+        val hwdec = m.getPropertyString("hwdec-current")?.trim().orEmpty()
+        Log.i(TAG, "[Fallback] decode probe: hwdec-current='$hwdec', vo='${m.getPropertyString("vo")}'")
+        if (hwdec.isNotEmpty() && hwdec != "no") {
+            Log.i(TAG, "[Fallback] hardware decoding active: $hwdec")
+            return
+        }
+        val next = when (decodeFallbackStage) {
+            0 -> "mediacodec-copy"
+            1 -> "auto-safe"
+            else -> null
+        }
+        if (next == null) {
+            Log.i(TAG, "[Fallback] auto-safe still reports no hardware decoder; playback stays in software")
+            return
+        }
+        decodeFallbackStage++
+        configuredHwdec = next
+        Log.i(TAG, "[Fallback] no hardware decoder in use — retrying with hwdec=$next")
+        applyFallbackOptions()
+    }
+
+    /**
+     * Watch the dropped-frame counter. A fast rise while a hardware decoder
+     * is in use means the video output cannot keep up (gpu-next on a weak TV
+     * GPU), not the decoder — step the renderer down to the classic gpu
+     * renderer, which is much cheaper per frame.
+     */
+    private fun sampleFrameDrops(token: Long) {
+        if (token != fallbackToken || !isRunning || renderFallbackDone) return
+        val m = mpv ?: return
+        val drops = m.getPropertyInt("frame-drop-count") ?: return
+        if (lastDropCount < 0) {
+            lastDropCount = drops
+            return
+        }
+        val delta = drops - lastDropCount
+        lastDropCount = drops
+        val hwdec = m.getPropertyString("hwdec-current")?.trim().orEmpty()
+        // A dropped-frame rise without a hardware decoder is a decoder
+        // problem; the renderer is not what needs changing.
+        if (hwdec.isEmpty() || hwdec == "no") return
+        if (delta <= TV_FRAME_DROP_LIMIT) return
+        renderFallbackDone = true
+        Log.i(
+            TAG,
+            "[Fallback] $delta frames dropped within ${TV_DROP_WINDOW_MS}ms with hwdec=$hwdec — switching vo to gpu",
+        )
+        applyFallbackOptions()
+    }
+
+    /**
+     * Apply the downgraded decoder and renderer, then rebuild the pipeline:
+     * the file is reloaded at its current position so the decoder is
+     * recreated with the new hwdec (the recovery path already reloads).
+     */
+    private fun applyFallbackOptions() {
+        val m = mpv ?: return
+        // Only touch what actually changed: re-setting hwdec rebuilds the
+        // decoder, re-setting vo rebuilds the video output.
+        if (m.getPropertyString("hwdec") != configuredHwdec) {
+            if (m.setOptionString("hwdec", configuredHwdec) != 0) {
+                Log.i(TAG, "[Fallback] mpv rejected hwdec=$configuredHwdec — keeping the previous decoder")
+            }
+        }
+        if (m.getPropertyString("vo") != configuredVo) {
+            if (m.setOptionString("vo", configuredVo) != 0) {
+                // The classic gpu renderer may be missing from the build: keep
+                // the one that works rather than dropping the video output.
+                Log.i(TAG, "[Fallback] mpv rejected vo=$configuredVo — keeping the previous renderer")
+                return
+            }
+        }
+        Log.i(TAG, "[Fallback] applying hwdec=$configuredHwdec, vo=$configuredVo")
+        recoverVideoOutput(surface)
     }
 
     // MARK: - Playback Controls
@@ -1194,6 +1383,10 @@ class MPVLayerRenderer(
             info["hwdec"] = it
         }
 
+        // The decoder the fallback chain settled on. It differs from
+        // hwdec-current only while a downgrade is still pending.
+        info["hwdecConfigured"] = configuredHwdec
+
         // Estimated video output fps (renderer-side, after filtering).
         // Useful for diagnosing display/pipeline drops vs container fps.
         mpv?.getPropertyDouble("estimated-vf-fps")?.takeIf { it > 0 }?.let {
@@ -1359,6 +1552,8 @@ class MPVLayerRenderer(
             }
             MPVLib.MPV_EVENT_FILE_LOADED -> {
                 didNotifyPlaybackEnd = false
+                // The decoder exists by now: arm the TV fallback probes.
+                scheduleFallbackProbes()
                 // Add external subtitles now that file is loaded
                 if (pendingExternalSubtitles.isNotEmpty()) {
                     pendingExternalSubtitles.forEachIndexed { index, subUrl ->
@@ -1398,6 +1593,9 @@ class MPVLayerRenderer(
             MPVLib.MPV_EVENT_SEEK -> {
                 // Seek started - show loading indicator and enable immediate progress updates
                 _isSeeking = true
+                // Seeking drops frames on purpose (hr-seek-framedrop); re-baseline
+                // the drop counter so the seek is not read as a slow renderer.
+                lastDropCount = -1
                 activeSeekReportRequestId = seekReportRequestId
                 if (!_isLoading) {
                     _isLoading = true
