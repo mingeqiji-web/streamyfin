@@ -595,6 +595,7 @@ export default function DirectPlayerPage() {
               audioMode: settings.audioTranscodeMode,
               forceServerTranscode: settings.forceServerTranscode,
             }),
+            forceServerTranscode: settings.forceServerTranscode,
           });
           if (!res) {
             // Without flipping isError this path used to leave the loading

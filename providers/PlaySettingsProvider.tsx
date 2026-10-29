@@ -97,6 +97,7 @@ export const PlaySettingsProvider: React.FC<{ children: React.ReactNode }> = ({
           audioStreamIndex: newSettings?.audioIndex ?? 0,
           subtitleStreamIndex: newSettings?.subtitleIndex ?? -1,
           userId: user.Id,
+          forceServerTranscode: settings.forceServerTranscode,
         });
 
         console.log("getStreamUrl ~");

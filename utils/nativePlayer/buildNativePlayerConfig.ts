@@ -470,6 +470,7 @@ export async function buildNativePlayerConfig(params: {
         audioMode: settings.audioTranscodeMode,
         forceServerTranscode: settings.forceServerTranscode,
       }),
+      forceServerTranscode: settings.forceServerTranscode,
     });
     if (!res?.url || !res.mediaSource || !res.sessionId) return null;
     stream = {

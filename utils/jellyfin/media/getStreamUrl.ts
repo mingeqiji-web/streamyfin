@@ -23,6 +23,15 @@ interface StreamResult {
 type PlaybackInfoRequest = PlaybackInfoDto & {
   /** Compatibility flag sent by the existing playback/download requests. */
   isPlayback: boolean;
+  /**
+   * [custom build] Force the server to re-encode instead of remuxing.
+   * Jellyfin remuxes ("DirectStream") whenever the codec matches a transcode
+   * target, so dropping the DirectPlay profile alone is not enough: the
+   * negotiation still comes back with IsVideoDirect=true.
+   */
+  EnableDirectPlay?: boolean;
+  EnableDirectStream?: boolean;
+  AllowVideoStreamCopy?: boolean;
 };
 
 /**
@@ -139,6 +148,7 @@ export const getStreamUrl = async ({
   subtitleStreamIndex = undefined,
   mediaSourceId,
   deviceId,
+  forceServerTranscode = false,
 }: {
   api: Api | null | undefined;
   item: BaseItemDto | null | undefined;
@@ -152,6 +162,8 @@ export const getStreamUrl = async ({
   height?: number;
   mediaSourceId?: string | null;
   deviceId?: string | null;
+  /** [custom build] video must be re-encoded server-side (audio may still direct play). */
+  forceServerTranscode?: boolean;
 }): Promise<{
   url: string | null;
   sessionId: string | null;
@@ -242,6 +254,15 @@ export const getStreamUrl = async ({
     MaxStreamingBitrate: maxStreamingBitrate,
     AudioStreamIndex: audioStreamIndex,
     MediaSourceId: mediaSourceId,
+    // [custom build] force real server-side transcoding: no direct play, no
+    // remux of the video stream. Audio stream copy stays allowed.
+    ...(forceServerTranscode
+      ? {
+          EnableDirectPlay: false,
+          EnableDirectStream: false,
+          AllowVideoStreamCopy: false,
+        }
+      : {}),
   };
   const res = await getMediaInfoApi(api).getPostedPlaybackInfo({
     itemId: item.Id,
