@@ -9,11 +9,8 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.Gravity
 import android.view.LayoutInflater
-import android.view.SurfaceView
 import android.view.ViewGroup
-import android.widget.FrameLayout
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ColorInfo
@@ -27,13 +24,13 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
-import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
@@ -149,7 +146,6 @@ class ExoPlayerView(context: Context, appContext: AppContext) : ExpoView(context
     private var subtitleBorderStyle: String = "outline-and-shadow"
 
     private var isZoomedToFill: Boolean = false
-    private var currentVideoAspectRatio: Float? = null
 
     // Captured by analyticsListener; surfaced via getTechnicalInfo().
     // Reset on destroy() and (for decoder names) on track changes.
@@ -191,14 +187,6 @@ class ExoPlayerView(context: Context, appContext: AppContext) : ExpoView(context
             // PlayerView also receives this callback. Post our styled cues so
             // they are applied after PlayerView forwards the unmodified cues.
             subtitleView?.post { applySubtitleCues() }
-        }
-
-        override fun onVideoSizeChanged(videoSize: VideoSize) {
-            if (videoSize.width <= 0 || videoSize.height <= 0) return
-
-            currentVideoAspectRatio =
-                videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
-            playerView.post { updateVideoSurfaceLayout() }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -312,11 +300,12 @@ class ExoPlayerView(context: Context, appContext: AppContext) : ExpoView(context
         // applies the crop rectangle — decoder block padding (the green bar
         // some files showed) never reaches the display, and the HDR/DV path
         // stays available (TextureView pulls frames through the app's GPU,
-        // which forces SDR). Aspect is handled by sizing the surface with
-        // explicit pixel dimensions in updateVideoSurfaceLayout() — never
-        // MATCH_PARENT — so neither Yoga nor the platform compositor (the
-        // failure that originally pushed this view onto TextureView) has
-        // anything to override.
+        // which forces SDR). The aspect ratio is media3's job: the
+        // AspectRatioFrameLayout inside the PlayerView sizes the content
+        // frame to the video's aspect ratio (FIT letterboxes, ZOOM crops),
+        // so a 2.4:1 source keeps its shape instead of being stretched to
+        // the screen. Never size the surface by hand — it fights that
+        // frame's own onMeasure.
         playerView = LayoutInflater.from(context).inflate(
             R.layout.exoplayer_player_view,
             this,
@@ -326,15 +315,8 @@ class ExoPlayerView(context: Context, appContext: AppContext) : ExpoView(context
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
         )
-        // Zoom-to-fill sizes the surface beyond the parent's bounds; let the
-        // overflow render instead of clipping to the content frame.
-        (playerView as? ViewGroup)?.clipChildren = false
-        (playerView.videoSurfaceView?.parent as? ViewGroup)?.clipChildren = false
         subtitleView = playerView.subtitleView
         addView(playerView)
-        playerView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            updateVideoSurfaceLayout()
-        }
     }
 
     /**
@@ -1118,59 +1100,23 @@ class ExoPlayerView(context: Context, appContext: AppContext) : ExpoView(context
 
     // MARK: - Video Scaling
 
-    private fun updateVideoSurfaceLayout() {
-        val aspectRatio = currentVideoAspectRatio ?: return
-        val surface = playerView.videoSurfaceView as? SurfaceView ?: return
-        val viewWidth = playerView.width
-        val viewHeight = playerView.height
-        if (viewWidth <= 0 || viewHeight <= 0 || !aspectRatio.isFinite()) return
-
-        val viewAspectRatio = viewWidth.toFloat() / viewHeight
-
-        // Explicit pixel dimensions (never MATCH_PARENT) so neither Yoga nor
-        // the platform compositor has anything to override — the failure that
-        // originally pushed this view onto TextureView. CENTER gravity keeps
-        // letterbox/pillarbox bands showing this view's black background.
-        val surfaceWidth: Int
-        val surfaceHeight: Int
-
-        if (isZoomedToFill) {
-            // Zoom: fill the constraining dimension, crop the overflow.
-            if (aspectRatio > viewAspectRatio) {
-                surfaceHeight = viewHeight
-                surfaceWidth = (viewHeight * aspectRatio).toInt()
-            } else {
-                surfaceWidth = viewWidth
-                surfaceHeight = (viewWidth / aspectRatio).toInt()
-            }
-        } else {
-            // Fit: match the constraining dimension, letterbox the rest.
-            if (aspectRatio > viewAspectRatio) {
-                surfaceWidth = viewWidth
-                surfaceHeight = (viewWidth / aspectRatio).toInt()
-            } else {
-                surfaceHeight = viewHeight
-                surfaceWidth = (viewHeight * aspectRatio).toInt()
-            }
-        }
-
-        val lp = surface.layoutParams
-        if (
-            lp is FrameLayout.LayoutParams &&
-            lp.width == surfaceWidth &&
-            lp.height == surfaceHeight &&
-            lp.gravity == Gravity.CENTER
-        ) {
-            return
-        }
-        surface.layoutParams = FrameLayout.LayoutParams(surfaceWidth, surfaceHeight).apply {
-            gravity = Gravity.CENTER
-        }
-    }
-
+    /**
+     * Toggles zoom-to-fill.
+     *
+     * The geometry belongs to media3: the AspectRatioFrameLayout inside the
+     * PlayerView sizes the content frame to the video's aspect ratio, so
+     * FIT letterboxes a 2.4:1 source and ZOOM crops it to fill the screen.
+     * Sizing the surface by hand instead fights that frame's onMeasure and
+     * ends up stretched by the compositor.
+     */
     fun setZoomedToFill(zoomed: Boolean) {
         isZoomedToFill = zoomed
-        updateVideoSurfaceLayout()
+        playerView.resizeMode =
+            if (zoomed) {
+                AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            } else {
+                AspectRatioFrameLayout.RESIZE_MODE_FIT
+            }
     }
 
     fun isZoomedToFill(): Boolean = isZoomedToFill
