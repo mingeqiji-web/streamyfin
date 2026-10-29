@@ -298,6 +298,10 @@
         "none": "无",
         "original_language": "原始语言",
         "language": "语言",
+        "force_server_transcode": {
+          "title": "强制服务器转码",
+          "description": "所有视频一律由服务器转码，不直连播放（关闭即恢复原生直连）"
+        },
         "transcode_mode": {
           "title": "音频转码",
           "description": "控制如何处理环绕声（7.1、TrueHD、DTS-HD）",

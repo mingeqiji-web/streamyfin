@@ -8,6 +8,8 @@ import { useTVFocusAnimation } from "../hooks/useTVFocusAnimation";
 
 export interface TVSettingsToggleProps {
   label: string;
+  /** Optional secondary line under the label (e.g. what the toggle actually does). */
+  description?: string;
   value: boolean;
   onToggle: (value: boolean) => void;
   isFirst?: boolean;
@@ -22,6 +24,7 @@ export interface TVSettingsToggleProps {
 
 export const TVSettingsToggle: React.FC<TVSettingsToggleProps> = ({
   label,
+  description,
   value,
   onToggle,
   isFirst,
@@ -65,6 +68,18 @@ export const TVSettingsToggle: React.FC<TVSettingsToggleProps> = ({
           <Text style={{ fontSize: typography.body, color: "#FFFFFF" }}>
             {label}
           </Text>
+          {description && (
+            <Text
+              style={{
+                fontSize: typography.callout,
+                color: "#9CA3AF",
+                marginTop: scaleSize(2),
+                maxWidth: scaleSize(600),
+              }}
+            >
+              {description}
+            </Text>
+          )}
           {disabledByAdmin && (
             <Text
               style={{

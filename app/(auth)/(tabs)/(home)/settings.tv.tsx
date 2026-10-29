@@ -1003,6 +1003,16 @@ export default function SettingsTV() {
               updateMediaSettings({ rememberAudioSelections: value })
             }
           />
+          <TVSettingsToggle
+            label={t("home.settings.audio.force_server_transcode.title")}
+            description={t(
+              "home.settings.audio.force_server_transcode.description",
+            )}
+            value={settings.forceServerTranscode}
+            onToggle={(value) =>
+              updateSettings({ forceServerTranscode: value })
+            }
+          />
           <TVSettingsOptionButton
             label={t("home.settings.audio.transcode_mode.title")}
             value={audioTranscodeLabel}
