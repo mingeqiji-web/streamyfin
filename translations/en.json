@@ -298,6 +298,10 @@
         "none": "None",
         "original_language": "Original language",
         "language": "Language",
+        "force_server_transcode": {
+          "title": "Force server transcoding",
+          "description": "Always transcode video on the server instead of direct playing"
+        },
         "transcode_mode": {
           "title": "Audio transcoding",
           "description": "Controls how surround audio (7.1, TrueHD, DTS-HD) is handled",

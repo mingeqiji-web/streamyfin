@@ -85,6 +85,7 @@ export const PlaySettingsProvider: React.FC<{ children: React.ReactNode }> = ({
           platform: Platform.OS as "ios" | "android",
           player: getActivePlayerType(settings),
           audioMode: settings.audioTranscodeMode,
+          forceServerTranscode: settings.forceServerTranscode,
         });
         const data = await getStreamUrl({
           api,

@@ -342,6 +342,18 @@ export const SubtitleToggles: React.FC<Props> = React.memo(({ ...props }) => {
         </ListItem>
 
         <ListItem
+          title={t("home.settings.audio.force_server_transcode.title")}
+          subtitle={t("home.settings.audio.force_server_transcode.description")}
+        >
+          <SettingSwitch
+            value={settings.forceServerTranscode}
+            onValueChange={(value) =>
+              updateSettings({ forceServerTranscode: value })
+            }
+          />
+        </ListItem>
+
+        <ListItem
           title={t("home.settings.audio.transcode_mode.title")}
           subtitle={t("home.settings.audio.transcode_mode.description")}
           disabled={isAudioTranscodeModeLocked}

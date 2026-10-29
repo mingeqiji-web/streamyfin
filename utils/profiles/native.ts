@@ -42,6 +42,8 @@ export interface ProfileOptions {
    * explicitly only for tests.
    */
   supportsDolbyVision?: boolean;
+  /** Custom build: when true (default), video DirectPlayProfiles are removed so the server always transcodes. Audio direct play is kept. */
+  forceServerTranscode?: boolean;
 }
 
 /**
@@ -251,6 +253,7 @@ export const generateDeviceProfile = (options: ProfileOptions = {}) => {
   const av1Transcode = options.supportsAv1Transcode ?? supportsAv1Transcode();
   const supportsDolbyVision =
     options.supportsDolbyVision ?? supportsDolbyVisionHardwareDecode();
+  const forceTranscode = options.forceServerTranscode ?? true;
 
   // ExoPlayer branch — Media3 capabilities on Android TV.
   if (player === "exoplayer" && platform === "android") {
@@ -294,7 +297,10 @@ export const generateDeviceProfile = (options: ProfileOptions = {}) => {
           Codec: "vorbis,opus,flac,alac,pcm,mp3,aac,ac3,eac3,dts,dtshd,truehd",
         },
       ],
-      DirectPlayProfiles: [exoDirect.video, exoDirect.audio],
+      // [custom build] forceServerTranscode removes video direct play so the server transcodes
+      DirectPlayProfiles: forceTranscode
+        ? [exoDirect.audio]
+        : [exoDirect.video, exoDirect.audio],
       TranscodingProfiles: [
         {
           Type: MediaTypes.Video,
@@ -363,19 +369,21 @@ export const generateDeviceProfile = (options: ProfileOptions = {}) => {
       },
       getAudioCodecProfile(platform),
     ],
-    DirectPlayProfiles: [
-      {
-        Type: MediaTypes.Video,
-        // "hls" stays for Jellyfin 10.11, where it is what lets a Live TV
-        // channel that is itself an HLS manifest direct play. Jellyfin 12
-        // never direct plays a manifest and ignores the entry
-        // (jellyfin/jellyfin#17768).
-        Container: "mp4,mkv,avi,mov,flv,ts,m2ts,webm,ogv,3gp,hls",
-        VideoCodec: videoCodecs.directPlay,
-        AudioCodec: directPlayCodec,
-      },
-      getAudioDirectPlayProfile(platform),
-    ],
+    DirectPlayProfiles: forceTranscode
+      ? [getAudioDirectPlayProfile(platform)]
+      : [
+          {
+            Type: MediaTypes.Video,
+            // "hls" stays for Jellyfin 10.11, where it is what lets a Live TV
+            // channel that is itself an HLS manifest direct play. Jellyfin 12
+            // never direct plays a manifest and ignores the entry
+            // (jellyfin/jellyfin#17768).
+            Container: "mp4,mkv,avi,mov,flv,ts,m2ts,webm,ogv,3gp,hls",
+            VideoCodec: videoCodecs.directPlay,
+            AudioCodec: directPlayCodec,
+          },
+          getAudioDirectPlayProfile(platform),
+        ],
     TranscodingProfiles: [
       {
         Type: MediaTypes.Video,

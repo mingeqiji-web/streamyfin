@@ -15,7 +15,7 @@ export const generateDownloadProfile = (
   audioMode: AudioTranscodeModeType = "auto",
 ): DeviceProfile => {
   // Get the base profile with proper audio codec configuration
-  const baseProfile = generateDeviceProfile({ audioMode });
+  const baseProfile = generateDeviceProfile({ audioMode, forceServerTranscode: false });
 
   // Override with download-specific settings
   return {

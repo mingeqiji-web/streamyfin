@@ -468,6 +468,7 @@ export async function buildNativePlayerConfig(params: {
       deviceProfile: generateDeviceProfile({
         player: getActivePlayerType(settings),
         audioMode: settings.audioTranscodeMode,
+        forceServerTranscode: settings.forceServerTranscode,
       }),
     });
     if (!res?.url || !res.mediaSource || !res.sessionId) return null;
