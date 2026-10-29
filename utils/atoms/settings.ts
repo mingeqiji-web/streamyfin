@@ -547,6 +547,8 @@ export type Settings = {
   audioTranscodeMode: AudioTranscodeMode;
   // Custom build: force all video through server-side transcoding
   forceServerTranscode: boolean;
+  // Custom build: cap the mpv stream at 1080p for TVs that cannot decode 4K
+  tvCompatibilityMode: boolean;
   // Optional third-party lookups. Both call a service directly from the client
   // rather than through Jellyfin, so each can be turned off on its own.
   wikidataAwardsEnabled: boolean;
@@ -727,6 +729,7 @@ export const defaultValues: Settings = {
   // Audio transcoding mode
   audioTranscodeMode: AudioTranscodeMode.Auto,
   forceServerTranscode: true,
+  tvCompatibilityMode: false,
   // Optional third-party lookups
   wikidataAwardsEnabled: true,
   openSubtitlesEnabled: true,

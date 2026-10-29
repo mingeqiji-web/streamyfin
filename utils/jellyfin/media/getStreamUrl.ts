@@ -149,6 +149,7 @@ export const getStreamUrl = async ({
   mediaSourceId,
   deviceId,
   forceServerTranscode = false,
+  tvCompatibilityMode = false,
 }: {
   api: Api | null | undefined;
   item: BaseItemDto | null | undefined;
@@ -164,6 +165,8 @@ export const getStreamUrl = async ({
   deviceId?: string | null;
   /** [custom build] video must be re-encoded server-side (audio may still direct play). */
   forceServerTranscode?: boolean;
+  /** [custom build] ask the server for at most 1080p (mpv channel on weak TVs). */
+  tvCompatibilityMode?: boolean;
 }): Promise<{
   url: string | null;
   sessionId: string | null;
@@ -263,6 +266,10 @@ export const getStreamUrl = async ({
           AllowVideoStreamCopy: false,
         }
       : {}),
+    // [custom build] TV compatibility mode: cap what the server hands us at
+    // 1080p. Only meaningful while the server transcodes — a direct stream
+    // ignores these.
+    ...(tvCompatibilityMode ? { MaxWidth: 1920, MaxHeight: 1080 } : {}),
   };
   const res = await getMediaInfoApi(api).getPostedPlaybackInfo({
     itemId: item.Id,

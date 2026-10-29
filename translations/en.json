@@ -302,6 +302,10 @@
           "title": "Force server transcoding",
           "description": "Always transcode video on the server instead of direct playing"
         },
+        "tv_compatibility_mode": {
+          "title": "TV compatibility mode (limit 1080p)",
+          "description": "Ask the server for at most 1080p on the mpv player; less sharp, but smooth on weaker TVs"
+        },
         "transcode_mode": {
           "title": "Audio transcoding",
           "description": "Controls how surround audio (7.1, TrueHD, DTS-HD) is handled",

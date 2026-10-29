@@ -596,6 +596,10 @@ export default function DirectPlayerPage() {
               forceServerTranscode: settings.forceServerTranscode,
             }),
             forceServerTranscode: settings.forceServerTranscode,
+            // The 1080p cap is a workaround for the mpv path on weak TVs.
+            tvCompatibilityMode:
+              settings.tvCompatibilityMode &&
+              getActivePlayerType(settings) === "mpv",
           });
           if (!res) {
             // Without flipping isError this path used to leave the loading

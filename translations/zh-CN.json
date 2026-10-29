@@ -302,6 +302,10 @@
           "title": "强制服务器转码",
           "description": "所有视频一律由服务器转码，不直连播放（关闭即恢复原生直连）"
         },
+        "tv_compatibility_mode": {
+          "title": "TV 兼容模式（限 1080p）",
+          "description": "mpv 通道请服务端最多输出 1080p，画质略降但弱 TV 上更流畅"
+        },
         "transcode_mode": {
           "title": "音频转码",
           "description": "控制如何处理环绕声（7.1、TrueHD、DTS-HD）",

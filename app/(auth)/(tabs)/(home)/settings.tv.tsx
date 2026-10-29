@@ -1013,6 +1013,16 @@ export default function SettingsTV() {
               updateSettings({ forceServerTranscode: value })
             }
           />
+          <TVSettingsToggle
+            label={t("home.settings.audio.tv_compatibility_mode.title")}
+            description={t(
+              "home.settings.audio.tv_compatibility_mode.description",
+            )}
+            value={settings.tvCompatibilityMode}
+            onToggle={(value) =>
+              updateSettings({ tvCompatibilityMode: value })
+            }
+          />
           <TVSettingsOptionButton
             label={t("home.settings.audio.transcode_mode.title")}
             value={audioTranscodeLabel}

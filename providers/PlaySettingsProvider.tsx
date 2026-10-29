@@ -98,6 +98,10 @@ export const PlaySettingsProvider: React.FC<{ children: React.ReactNode }> = ({
           subtitleStreamIndex: newSettings?.subtitleIndex ?? -1,
           userId: user.Id,
           forceServerTranscode: settings.forceServerTranscode,
+          // The 1080p cap is a workaround for the mpv path on weak TVs.
+          tvCompatibilityMode:
+            settings.tvCompatibilityMode &&
+            getActivePlayerType(settings) === "mpv",
         });
 
         console.log("getStreamUrl ~");
