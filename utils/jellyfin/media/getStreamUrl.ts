@@ -7,6 +7,7 @@ import type {
 } from "@jellyfin/sdk/lib/generated-client/models";
 import { BaseItemKind } from "@jellyfin/sdk/lib/generated-client/models/base-item-kind";
 import { getLibraryApi, getMediaInfoApi } from "@jellyfin/sdk/lib/utils/api";
+import { Dimensions, Platform } from "react-native";
 import { markExpectedError } from "../../errors";
 import { generateDownloadProfile } from "../../profiles/download";
 import type { AudioTranscodeModeType } from "../../profiles/native";
@@ -142,9 +143,10 @@ const getDownloadUrl = (
  * The server upscales when the request leaves the output size open: a
  * 1920x800 source came back as 3840x1600, twice the pixels for nothing but
  * GPU and bandwidth. The cap is the source's own size, so a transcode never
- * inflates what the player has to decode; a source at or below 1080p is
- * capped at 1080p, and a source whose size we don't know keeps the old
- * uncapped request — guessing low would cut a real 4K transfer short.
+ * inflates what the player has to decode, and on a TV the panel is the
+ * ceiling as well — a 1080p screen never benefits from a bigger transcode.
+ * A phone is not capped by its window: a portrait box would scale a
+ * landscape video down to nothing.
  */
 const transcodeSizeCap = (
   item: BaseItemDto | null | undefined,
@@ -155,11 +157,19 @@ const transcodeSizeCap = (
     ...(item?.MediaStreams ?? []),
     ...(item?.MediaSources?.flatMap((s) => s.MediaStreams ?? []) ?? []),
   ].find((s) => s.Type === "Video");
-  const width = video?.Width ?? 0;
-  const height = video?.Height ?? 0;
-  if (width <= 0 || height <= 0) return null;
-  if (width <= 1920 && height <= 1080) return { MaxWidth: 1920, MaxHeight: 1080 };
-  return { MaxWidth: width, MaxHeight: height };
+  const sourceWidth = video?.Width ?? 0;
+  const sourceHeight = video?.Height ?? 0;
+  const window = Platform.isTV ? Dimensions.get("window") : null;
+  const maxWidth = Math.min(
+    sourceWidth > 0 ? sourceWidth : Infinity,
+    window?.width ?? Infinity,
+  );
+  const maxHeight = Math.min(
+    sourceHeight > 0 ? sourceHeight : Infinity,
+    window?.height ?? Infinity,
+  );
+  if (!Number.isFinite(maxWidth) || !Number.isFinite(maxHeight)) return null;
+  return { MaxWidth: Math.round(maxWidth), MaxHeight: Math.round(maxHeight) };
 };
 
 export const getStreamUrl = async ({

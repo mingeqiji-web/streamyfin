@@ -33,6 +33,58 @@ describe("getStreamUrl", () => {
     expect(url.searchParams.get("ApiKey")).toBe("SECRET_TOKEN");
   });
 
+  // The server upscales when the request leaves the output size open: a
+  // 1920x800 source came back as 3840x1600, twice the pixels for nothing
+  // but GPU and bandwidth.
+  test("caps the transcode at the source resolution", async () => {
+    const api = makeApi();
+    api.mock
+      .onPost(
+        "https://jellyfin.example.com/Items/item-1/PlaybackInfo",
+        bodyContaining({ MaxWidth: 1920, MaxHeight: 800 }),
+      )
+      .reply(200, {
+        PlaySessionId: "session-1",
+        MediaSources: [{ Id: "media-1", Container: "mkv" }],
+      });
+
+    const result = await getStreamUrl({
+      api,
+      item: {
+        Id: "item-1",
+        Type: "Movie",
+        MediaStreams: [{ Type: "Video", Width: 1920, Height: 800 }],
+      },
+      userId: "user-1",
+      startTimeTicks: 0,
+      deviceProfile: {},
+    });
+
+    expect(result?.url).toBeTruthy();
+  });
+
+  test("leaves a source of an unknown size uncapped", async () => {
+    const api = makeApi();
+    api.mock
+      .onPost("https://jellyfin.example.com/Items/item-1/PlaybackInfo")
+      .reply(200, {
+        PlaySessionId: "session-1",
+        MediaSources: [{ Id: "media-1", Container: "mkv" }],
+      });
+
+    await getStreamUrl({
+      api,
+      item: { Id: "item-1", Type: "Movie" },
+      userId: "user-1",
+      startTimeTicks: 0,
+      deviceProfile: {},
+    });
+
+    const body = JSON.parse(api.mock.history.post[0].data);
+    expect(body.MaxWidth).toBeUndefined();
+    expect(body.MaxHeight).toBeUndefined();
+  });
+
   // #1693: Live TV loaded forever. Without the opened live stream's id,
   // Jellyfin answers the direct play request with a 400.
   test("live TV direct play URL carries the opened live stream", async () => {
