@@ -136,6 +136,32 @@ const getDownloadUrl = (
   };
 };
 
+/**
+ * The size to cap a server-side transcode at.
+ *
+ * The server upscales when the request leaves the output size open: a
+ * 1920x800 source came back as 3840x1600, twice the pixels for nothing but
+ * GPU and bandwidth. The cap is the source's own size, so a transcode never
+ * inflates what the player has to decode; a source at or below 1080p is
+ * capped at 1080p, and a source whose size we don't know keeps the old
+ * uncapped request — guessing low would cut a real 4K transfer short.
+ */
+const transcodeSizeCap = (
+  item: BaseItemDto | null | undefined,
+  tvCompatibilityMode: boolean,
+): { MaxWidth: number; MaxHeight: number } | null => {
+  if (tvCompatibilityMode) return { MaxWidth: 1920, MaxHeight: 1080 };
+  const video = [
+    ...(item?.MediaStreams ?? []),
+    ...(item?.MediaSources?.flatMap((s) => s.MediaStreams ?? []) ?? []),
+  ].find((s) => s.Type === "Video");
+  const width = video?.Width ?? 0;
+  const height = video?.Height ?? 0;
+  if (width <= 0 || height <= 0) return null;
+  if (width <= 1920 && height <= 1080) return { MaxWidth: 1920, MaxHeight: 1080 };
+  return { MaxWidth: width, MaxHeight: height };
+};
+
 export const getStreamUrl = async ({
   api,
   item,
@@ -266,10 +292,12 @@ export const getStreamUrl = async ({
           AllowVideoStreamCopy: false,
         }
       : {}),
-    // [custom build] TV compatibility mode: cap what the server hands us at
-    // 1080p. Only meaningful while the server transcodes — a direct stream
-    // ignores these.
-    ...(tvCompatibilityMode ? { MaxWidth: 1920, MaxHeight: 1080 } : {}),
+    // [custom build] Cap what the server hands us. Leaving the output size
+    // open lets the server upscale: a 1920x800 source came back as
+    // 3840x1600 — twice the pixels, for nothing but GPU and bandwidth (and
+    // a plausible cause of the dropped frames the TV showed). Only
+    // meaningful while the server transcodes; a direct stream ignores these.
+    ...(transcodeSizeCap(item, tvCompatibilityMode) ?? {}),
   };
   const res = await getMediaInfoApi(api).getPostedPlaybackInfo({
     itemId: item.Id,
