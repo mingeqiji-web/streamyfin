@@ -68,6 +68,16 @@ class MPVLayerRenderer(
         const val MPV_FORMAT_DOUBLE = 5
         const val MPV_FORMAT_NODE = 6
 
+        /**
+         * Tags an untagged frame as BT.709 + limited range. The source and
+         * Jellyfin's server-side transcode both carry no colour tags, so mpv
+         * has no matrix to follow and reads the BT.709 picture as BT.601 —
+         * the image comes out green and red shifted. setparams puts the tags
+         * back on the frames before the VO converts them.
+         */
+        private const val UNTAGGED_COLOR_FILTER =
+            "lavfi=[setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=limited]"
+
         // One worker for every renderer: only one player is alive at a time,
         // and a daemon thread never keeps the process from exiting.
         private val surfaceSizeExecutor = Executors.newSingleThreadExecutor { task ->
@@ -230,6 +240,8 @@ class MPVLayerRenderer(
     private var renderFallbackDone = false
     /** Last frame-drop-count sample; -1 = re-baseline on the next sample. */
     private var lastDropCount = -1
+    /** The colour filter currently forced on the frames, "" when none. */
+    private var appliedColorFilter: String = ""
     
     override val isPausedState: Boolean
         get() = _isPaused
@@ -874,6 +886,10 @@ class MPVLayerRenderer(
         mpv?.observeProperty("video-params/w", MPV_FORMAT_INT64)
         mpv?.observeProperty("video-params/h", MPV_FORMAT_INT64)
         mpv?.observeProperty("video-params/rotate", MPV_FORMAT_INT64)
+        // The matrix of the decoded frame. A stream with no colour tags
+        // (the common case for a Jellyfin server-side transcode) reports
+        // "auto" here, which is what leaves mpv without a matrix to follow.
+        mpv?.observeProperty("video-params/colormatrix", MPV_FORMAT_STRING)
     }
 
     // MARK: - TV fallback chain
@@ -1312,6 +1328,39 @@ class MPVLayerRenderer(
 
     // MARK: - Technical Info
 
+    /**
+     * Tag an untagged stream as BT.709 + limited range.
+     *
+     * Jellyfin's server-side transcode writes no colour tags, and an
+     * untagged source has none either, so mpv gets no matrix to follow: the
+     * copy path reads the BT.709 picture as BT.601 and the image comes out
+     * green and red shifted. setparams puts the tags back on the frames
+     * before the VO converts them.
+     *
+     * Applied only while the matrix is missing, so a tagged stream (HDR
+     * included) is never relabelled, and set on the `vf` property instead
+     * of as an option: a build without lavfi would fail the whole player
+     * at initialize() time rather than just this one filter.
+     *
+     * shortcut: content below 720 lines is tagged BT.709 too, where BT.601
+     * would be right; upgrade when untagged SD shows up in the wild.
+     */
+    private fun applyUntaggedColorFallback(matrix: String) {
+        val untagged = matrix.isBlank() || matrix == "auto" || matrix == "unspecified"
+        val wanted = if (untagged) UNTAGGED_COLOR_FILTER else ""
+        if (wanted == appliedColorFilter) return
+        appliedColorFilter = wanted
+        mpv?.setPropertyString("vf", wanted)
+        // The output target follows the input: an untagged stream is pinned
+        // to BT.709, a tagged one keeps mpv's own choice.
+        mpv?.setPropertyString("target-colorspace", if (untagged) "bt709" else "auto")
+        mpv?.setPropertyString("target-prim", if (untagged) "bt709" else "auto")
+        Log.i(
+            TAG,
+            "Colour matrix '$matrix' → ${if (untagged) "tagged BT.709/limited" else "left as is"}",
+        )
+    }
+
     override fun getTechnicalInfo(): Map<String, Any> {
         val info = mutableMapOf<String, Any>()
 
@@ -1497,7 +1546,9 @@ class MPVLayerRenderer(
     }
     
     override fun eventProperty(property: String, value: String) {
-        // Handle string properties if needed
+        when (property) {
+            "video-params/colormatrix" -> applyUntaggedColorFallback(value)
+        }
     }
     
     override fun eventProperty(property: String, value: Double) {
